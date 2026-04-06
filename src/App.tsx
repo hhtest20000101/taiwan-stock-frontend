@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { getStockRecentPrice, StockPrice } from "./services/api"
+import { getStockRecentPrice, type StockPrice } from "./services/api"
 
 // 定義 UI 使用的股票型別
 interface UIStock {
@@ -36,6 +36,7 @@ export default function App() {
       setLoading(true)
       try {
         const stockIds = ["2330", "2317", "2454", "2382"]
+        // 使用 Promise.all 併行抓取資料
         const results = await Promise.all(stockIds.map(id => getStockRecentPrice(id)))
         
         const formattedStocks = results.map((history, index) => {
@@ -54,7 +55,7 @@ export default function App() {
             volume: Math.floor(latest.volume / 1000).toLocaleString(),
             trend: diff >= 0 ? 'up' : 'down'
           } as UIStock
-        }).filter(s => s !== null) as UIStock[]
+        }).filter((s): s is UIStock => s !== null)
 
         setStocks(formattedStocks)
 
@@ -68,8 +69,8 @@ export default function App() {
           
           setMarketIndices([
             { name: "加權指數", price: latest.close.toLocaleString(), change: (diff >= 0 ? "+" : "") + diff.toFixed(2), percent: (diff >= 0 ? "+" : "") + pct.toFixed(2) + "%", trend: diff >= 0 ? 'up' : 'down' },
-            { name: "預估量 (張)", price: "依盤中為準", change: "", percent: "", trend: 'up' }, // 範例佔位
-            { name: "昨收參考", price: prev.close.toLocaleString(), change: "", percent: "", trend: 'up' }
+            { name: "昨收參考", price: prev.close.toLocaleString(), change: "", percent: "", trend: 'up' },
+            { name: "資料更新", price: latest.date, change: "", percent: "", trend: 'up' }
           ])
         }
       } catch (error) {
@@ -114,7 +115,7 @@ export default function App() {
         {loading ? (
           <div className="flex flex-col items-center justify-center py-24 space-y-4">
             <Loader2 className="w-12 h-12 animate-spin text-primary opacity-50" />
-            <p className="text-muted-foreground font-medium">盤後數據載入中 (FinMind API)...</p>
+            <p className="text-muted-foreground font-medium">數據載入中 (FinMind API)...</p>
           </div>
         ) : (
           <>
@@ -147,7 +148,7 @@ export default function App() {
             <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
               <div className="space-y-1">
                 <h2 className="text-2xl font-bold tracking-tight">精選權值股行情</h2>
-                <p className="text-sm text-muted-foreground">顯示台股指標性權值個股的即時與昨收數據對比</p>
+                <p className="text-sm text-muted-foreground">顯示台股指標性權值個股的盤後數據</p>
               </div>
               <div className="flex gap-2 w-full md:w-auto">
                 <Button variant="outline" className="flex-1 md:flex-none">進階篩選</Button>
@@ -191,7 +192,7 @@ export default function App() {
                       </TableRow>
                     )) : (
                       <TableRow>
-                        <TableCell colSpan={6} className="text-center py-10 text-muted-foreground">呼叫頻率受限或無數據，請稍後再試。</TableCell>
+                        <TableCell colSpan={6} className="text-center py-10 text-muted-foreground">無資料或 API 限制中</TableCell>
                       </TableRow>
                     )}
                   </TableBody>
