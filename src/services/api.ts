@@ -10,7 +10,10 @@ export interface StockPrice {
   min: number
   close: number
   spread: number
-  volume: number
+  Trading_Volume: number // API v4 實際欄位名
+  Trading_money: number  // API v4 成交值欄位
+  Trading_turnover: number // 成交筆數
+  volume?: number // 保持相容性
 }
 
 export interface FinMindResponse<T> {
@@ -35,7 +38,12 @@ export const getStockRecentPrice = async (stockId: string): Promise<StockPrice[]
         start_date: startDate,
       },
     })
-    return response.data.data
+    
+    // 進行欄位轉化與校正，確保 volume 始終可用
+    return response.data.data.map(item => ({
+      ...item,
+      volume: item.Trading_Volume // 將 Trading_Volume 映射到通用 volume
+    }))
   } catch (error) {
     console.error(`Failed to fetch stock data for ${stockId}:`, error)
     return []
