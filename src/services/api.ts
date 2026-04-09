@@ -1,4 +1,19 @@
 import axios from "axios"
+import axiosRetry from "axios-retry"
+
+// 實作自動重試機制 (Retry Logic)，處理 503 等暫時性伺服器錯誤或網路異常
+axiosRetry(axios, {
+  retries: 3, // 最多重試 3 次
+  retryDelay: (retryCount) => {
+    console.log(`[API Retry] Attempt ${retryCount}... Waiting before retrying.`);
+    return axiosRetry.exponentialDelay(retryCount); // 使用指數退避延遲
+  },
+  retryCondition: (error) => {
+    // 當發生網路錯誤、超時，或 HTTP 狀態碼為 5xx (如 503 MODEL_CAPACITY_EXHAUSTED) / 429 (Rate Limit) 時重試
+    return axiosRetry.isNetworkOrIdempotentRequestError(error) || 
+           (error.response?.status !== undefined && (error.response.status >= 500 || error.response.status === 429));
+  }
+});
 
 const FINMIND_API_URL = "https://api.finmindtrade.com/api/v4/data"
 
@@ -81,19 +96,19 @@ export const getStockHistoricalPrice = async (stockId: string, days: number = 10
 }
 
 // 數據標準化函數 (DataAdapter)
-export const normalizeMarketData = (item: any): StockPrice => {
+export const normalizeMarketData = (item: Record<string, unknown>): StockPrice => {
     return {
-        date: item.date || item.Date,
-        stock_id: item.stock_id || item.StockId || "",
-        open: item.open || item.Open || 0,
-        max: item.max || item.High || item.max || 0,
-        min: item.min || item.Low || item.min || 0,
-        close: item.close || item.Close || 0,
-        spread: item.spread || 0,
-        Trading_Volume: item.Trading_Volume || item.Volume || 0,
-        Trading_money: item.Trading_money || item.TradeValue || 0,
-        Trading_turnover: item.Trading_turnover || item.Transaction || 0,
-        volume: item.Trading_Volume || item.Volume || 0
+        date: String(item.date || item.Date || ""),
+        stock_id: String(item.stock_id || item.StockId || ""),
+        open: Number(item.open || item.Open || 0),
+        max: Number(item.max || item.High || item.max || 0),
+        min: Number(item.min || item.Low || item.min || 0),
+        close: Number(item.close || item.Close || 0),
+        spread: Number(item.spread || 0),
+        Trading_Volume: Number(item.Trading_Volume || item.Volume || 0),
+        Trading_money: Number(item.Trading_money || item.TradeValue || 0),
+        Trading_turnover: Number(item.Trading_turnover || item.Transaction || 0),
+        volume: Number(item.Trading_Volume || item.Volume || 0)
     };
 };
 
@@ -102,7 +117,7 @@ export const getStockRecentPrice = async (stockId: string): Promise<StockPrice[]
   return getStockHistoricalPrice(stockId, 10);
 }
 
-export const getMarketData = async (): Promise<any[]> => {
+export const getMarketData = async (): Promise<StockPrice[]> => {
   // 對於加權指數等大盤數據，FinMind 有專門的 dataset: TaiwanStockPrice (大盤代號通常是 TAIEX)
   return getStockRecentPrice("TAIEX");
 }

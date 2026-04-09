@@ -5,7 +5,7 @@ import 'jspdf-autotable'
 // 為 jspdf-autotable 擴充型別定義 (避免 TS 報錯)
 declare module 'jspdf' {
   interface jsPDF {
-    autoTable: (options: any) => jsPDF
+    autoTable: (options: unknown) => jsPDF
   }
 }
 

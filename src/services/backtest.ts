@@ -65,13 +65,8 @@ const calculateRSI = (data: number[], period: number = 14): number[] => {
             const rs = avgGain / (avgLoss || 1);
             rsi.push(100 - (100 / (1 + rs)));
         } else {
-            const diff = data[i] - data[i - 1];
-            const currentGain = diff > 0 ? diff : 0;
-            const currentLoss = diff < 0 ? -diff : 0;
-            
-            // Wilder's Smoothing
-            const prevRSI = rsi[rsi.length - 1];
-            // Simple approach for now
+            // Wilder's Smoothing logic could be added here if needed,
+            // but currently using a simple average for RSI calculation.
             const avgGain = (gains / period);
             const avgLoss = (losses / period);
             const rs = avgGain / (avgLoss || 1);
@@ -87,7 +82,7 @@ const calculateRSI = (data: number[], period: number = 14): number[] => {
 export const runBacktest = (
   data: StockPrice[],
   strategyType: 'golden_cross' | 'rsi',
-  params: any = {}
+  params: Record<string, number> = {}
 ): BacktestResult => {
   const closes = data.map(d => d.close);
   const sma20 = calculateSMA(closes, params.shortTerm || 20);
@@ -106,7 +101,6 @@ export const runBacktest = (
 
   for (let i = 1; i < data.length; i++) {
     const currentPrice = data[i].close;
-    const prevPrice = data[i - 1].close;
     
     // 買入訊號
     const buySignal = strategyType === 'golden_cross' 

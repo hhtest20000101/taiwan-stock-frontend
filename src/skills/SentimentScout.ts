@@ -21,41 +21,42 @@ export class SentimentScout extends BaseSkill {
   `;
 
   async analyze(stockId: string): Promise<ExpertReport> {
-    // 模擬新聞抓取與情緒分析 (Mock Logic)
-    const mockNewsCount = Math.floor(Math.random() * 5) + 1;
-    const scores = Array.from({ length: mockNewsCount }, () => Math.random() * 100);
-    const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
+    try {
+      // 模擬新聞抓取與情緒分析 (Mock Logic)
+      const mockNewsCount = Math.floor(Math.random() * 5) + 1;
+      const scores = Array.from({ length: mockNewsCount }, () => Math.random() * 100);
+      const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
 
-    let sentiment: 'bullish' | 'bearish' | 'neutral' = 'neutral';
-    if (avgScore > 65) sentiment = 'bullish';
-    else if (avgScore < 35) sentiment = 'bearish';
+      let sentiment: 'bullish' | 'bearish' | 'neutral' = 'neutral';
+      if (avgScore > 65) sentiment = 'bullish';
+      else if (avgScore < 35) sentiment = 'bearish';
 
-    const mockKeywords = sentiment === 'bullish' ? ['外資連買', '營收創高', '產能滿載'] : 
-                         sentiment === 'bearish' ? ['遭砍目標價', '毛利承壓', '庫存調整'] : 
-                         ['持平看待', '盤整震盪', '觀望氣氛'];
+      const mockKeywords = sentiment === 'bullish' ? ['外資連買', '營收創高', '產能滿載'] : 
+                           sentiment === 'bearish' ? ['遭砍目標價', '毛利承壓', '庫存調整'] : 
+                           ['持平看待', '盤整震盪', '觀望氣氛'];
 
-    return {
-      stockId,
-      expertName: this.name,
-      sentiment,
-      confidenceScore: Math.round(avgScore),
-      summary: `📰 市場情緒${sentiment === 'bullish' ? '樂觀' : sentiment === 'bearish' ? '悲觀' : '中性'}。熱門關鍵字：${mockKeywords.join('、')}。`,
-      fullReport: `
-### 市場情緒調查報告 (報告代號: ${stockId})
-
-#### 1. 輿情與新聞監控
-在過去 24 小時內，我們掃描到共計 ${mockNewsCount} 則相關具權威性的報導。
-主要偵測到「${mockKeywords[0]}」等相關敘事，對股價形成心理支撐。
-
-#### 2. 法人預估
-多數大型券商對該股持有「${sentiment === 'bullish' ? '增持 (Overweight)' : sentiment === 'bearish' ? '減持 (Underweight)' : '中立 (Neutral)'}」評等。
-外資動向呈現${sentiment === 'bullish' ? '淨流入' : sentiment === 'bearish' ? '連續賣超' : '小幅調節'}，散戶討論熱度則處於${avgScore > 75 ? '過熱' : '溫和'}區間。
-
-#### 3. 風險提示
-${sentiment === 'bearish' ? '注意近期新聞可能引發多殺多，建議謹慎。' : '短期內未見重大負面消息，市場情緒偏向正面循環。'}
-      `,
-      timestamp: new Date().toLocaleTimeString()
-    };
+      return {
+        stockId,
+        expertName: this.name,
+        sentiment,
+        confidenceScore: Math.round(avgScore),
+        summary: `📰 市場情緒${sentiment === 'bullish' ? '樂觀' : sentiment === 'bearish' ? '悲觀' : '中性'}。熱門關鍵字：${mockKeywords.join('、')}。`,
+        fullReport: `### 市場情緒調查報告 (報告代號: ${stockId})\n\n#### 1. 輿情與新聞監控\n在過去 24 小時內，我們掃描到共計 ${mockNewsCount} 則相關具權威性的報導。\n主要偵測到「${mockKeywords[0]}」等相關敘事，對股價形成心理支撐。\n\n#### 2. 法人預估\n多數大型券商對該股持有「${sentiment === 'bullish' ? '增持 (Overweight)' : sentiment === 'bearish' ? '減持 (Underweight)' : '中立 (Neutral)'}」評等。\n外資動向呈現${sentiment === 'bullish' ? '淨流入' : sentiment === 'bearish' ? '連續賣超' : '小幅調節'}，散戶討論熱度則處於${avgScore > 75 ? '過熱' : '溫和'}區間。\n\n#### 3. 風險提示\n${sentiment === 'bearish' ? '注意近期新聞可能引發多殺多，建議謹慎。' : '短期內未見重大負面消息，市場情緒偏向正面循環。'}`,
+        timestamp: new Date().toLocaleTimeString()
+      };
+    } catch (err: unknown) {
+      console.error(`[${this.name}] 分析失敗:`, err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      return {
+        stockId,
+        expertName: this.name,
+        sentiment: 'neutral',
+        confidenceScore: 0,
+        summary: `🔍 情緒分析暫時中斷 (${errorMessage})。`,
+        fullReport: `### 市場情緒分析異常\n\n由於目前 AI 模型額度耗盡 (MODEL_CAPACITY_EXHAUSTED) 或網路擁塞，暫時無法從各大論壇與新聞源爬取 ${stockId} 的情緒指標。\n\n**系統建議**：請稍後再次嘗試分析。`,
+        timestamp: new Date().toLocaleTimeString()
+      };
+    }
   }
 }
 

@@ -41,13 +41,13 @@ export const getInstitutionalData = async (stockId: string): Promise<Institution
 
         // 取得最新一天的法人數據
         const latestDate = data[data.length - 1].date;
-        const dailyRecords = data.filter((d: any) => d.date === latestDate);
+        const dailyRecords = (data as InstitutionalData[]).filter((d: InstitutionalData) => d.date === latestDate);
 
         let foreignNet = 0;
         let trustNet = 0;
         let propNet = 0;
 
-        dailyRecords.forEach((r: any) => {
+        dailyRecords.forEach((r: InstitutionalData) => {
             const net = r.Buy - r.Sell;
             if (r.name === 'Foreign_Investor' || r.name === '外資及陸資') foreignNet += net;
             if (r.name === 'Investment_Trust' || r.name === '投信') trustNet += net;

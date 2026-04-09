@@ -72,6 +72,7 @@ const SECTORS = [
 
 export default function App() {
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [stocks, setStocks] = useState<UIStock[]>([])
   const [futures, setFutures] = useState<TAIFEXQuote[]>([])
   const [marketIndices, setMarketIndices] = useState<MarketIndex[]>([])
@@ -156,8 +157,10 @@ export default function App() {
             { name: "更新日期", price: latest.date, change: "", percent: "", trend: 'up' }
           ])
         }
-      } catch (error) {
-        console.error("Error fetching market data:", error)
+      } catch (err: unknown) {
+        console.error("Error fetching market data:", err)
+        const errorMessage = err instanceof Error ? err.message : String(err)
+        setError(errorMessage || "無法取得伺服器回應，可能由於請求過於頻繁或伺服器正在維護中。")
       } finally {
         setLoading(false)
       }
@@ -482,6 +485,15 @@ export default function App() {
                <p className="text-slate-400 font-medium max-w-sm">正在從 FinMind Cloud 獲取最新的台股即時行情與盤後數據...</p>
             </div>
           </div>
+        ) : error ? (
+           <div className="flex flex-col items-center justify-center py-40 space-y-4 animate-in fade-in duration-500">
+             <div className="text-rose-500 bg-rose-50 p-6 rounded-full mb-4 shadow-inner">
+               <Globe className="w-12 h-12" />
+             </div>
+             <h2 className="text-2xl font-black text-slate-900">連線異常 (Connection Error)</h2>
+             <p className="text-slate-500 font-medium max-w-md text-center">{error}</p>
+             <Button className="mt-8 bg-slate-900 text-white rounded-full px-8 hover:bg-slate-800" onClick={() => window.location.reload()}>重新嘗試加載 (Retry)</Button>
+           </div>
         ) : (
           <>
             {/* Top Market Indices */}

@@ -119,7 +119,6 @@ export default function StockChart({ data, stockName }: StockChartProps) {
       })
       .attr("width", candleWidth)
       .attr("height", d => {
-        const bodyHeight = Math.abs(d.open - d.close)
         return Math.max(yPrice(Math.min(d.open, d.close)) - yPrice(Math.max(d.open, d.close)), 1)
       })
       .attr("fill", d => d.close >= d.open ? "#ef4444" : "#10b981")
@@ -171,7 +170,7 @@ export default function StockChart({ data, stockName }: StockChartProps) {
     const tooltipDiv = d3.select("body").append("div")
       .attr("class", "fixed hidden bg-popover text-popover-foreground p-3 rounded-lg shadow-xl border text-xs pointer-events-none z-50 min-w-[160px]")
 
-    const hoverRect = priceGroup.append("rect")
+    priceGroup.append("rect")
       .attr("width", width)
       .attr("height", priceHeight)
       .attr("fill", "transparent")

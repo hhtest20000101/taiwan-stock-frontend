@@ -1,134 +1,113 @@
 import axios from 'axios';
 
-// --- Interfaces for Official APIs ---
+import type { StockPrice } from './api';
 
-export interface TWSEStockQuote {
-  Code: string;
-  Name: string;
-  TradeVolume: string;
-  TradeValue: string;
-  OpeningPrice: string;
-  HighestPrice: string;
-  LowestPrice: string;
-  ClosingPrice: string;
-  Change: string;
-  Transaction: string;
-}
-
-export interface TPExStockQuote {
-  Date: string;
-  SecuritiesCompanyCode: string;
-  CompanyName: string;
-  Close: string;
-  Change: string;
-  Open: string;
-  High: string;
-  Low: string;
-  TradingShares: string;
-  TransactionAmount: string;
-  TransactionNumber: string;
+export interface UnifiedStockData {
+  stock_id: string;
+  stock_name: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  change: number;
+  change_percent: number;
+  is_futures?: boolean;
 }
 
 export interface TAIFEXQuote {
   Date: string;
   ProductCode: string;
   ContractMonth: string;
-  Open: string;
-  High: string;
-  Low: string;
-  Close: string;
-  PriceChange: string;
-  PriceChangePercent: string;
-  Volume: string;
-  SettlementPrice: string;
-  OpenInterest: string;
+  Open: number;
+  High: number;
+  Low: number;
+  Close: number;
+  Trading_Volume: number;
+  Settlement_Price?: number;
 }
 
-// --- Common Unified Interface ---
-
-export interface UnifiedStockData {
-  stock_id: string;
-  stock_name: string;
-  open: number;
-  max: number;
-  min: number;
-  close: number;
-  change: number;
-  volume: number; // In shares
-  turnover: number; // In TWD
-  market: 'TWSE' | 'TPEx';
-  date: string;
-}
-
-// --- API Service ---
-
-const getTodayString = () => new Date().toISOString().split('T')[0].replace(/-/g, '');
-
-const TWSE_URL = '/api/twse/v1/exchangeReport/STOCK_DAY_ALL';
+// 代理服務路徑 (已在 vite.config.ts 設定)
+const TWSE_URL = '/api/twse/exchangeReport/STOCK_DAY_ALL?response=open_data';
 const TPEX_URL = '/api/tpex/openapi/v1/tpex_mainboard_quotes';
 const TAIFEX_URL = '/api/taifex/v1/DailyQuote';
 
 export const fetchAllStocks = async (): Promise<UnifiedStockData[]> => {
   try {
-    const todayStr = getTodayString();
-    const [twseRes, tpexRes] = await Promise.allSettled([
-      axios.get<TWSEStockQuote[]>(TWSE_URL, { params: { date: todayStr } }),
-      axios.get<TPExStockQuote[]>(TPEX_URL, { params: { date: todayStr } })
+    const [twseRes, tpexRes] = await Promise.all([
+      axios.get(TWSE_URL),
+      axios.get(TPEX_URL)
     ]);
 
-    const unifiedData: UnifiedStockData[] = [];
-    const today = new Date().toISOString().split('T')[0];
+    const twseData: UnifiedStockData[] = (twseRes.data || []).map((item: Record<string, unknown>) => ({
+      stock_id: String(item.Code || ""),
+      stock_name: String(item.Name || ""),
+      open: parseFloat(item.OpeningPrice || "0"),
+      high: parseFloat(item.HighestPrice || "0"),
+      low: parseFloat(item.LowestPrice || "0"),
+      close: parseFloat(item.ClosingPrice || "0"),
+      volume: parseInt(item.TradeVolume || "0"),
+      change: parseFloat(item.Change || "0"),
+      change_percent: 0 // 需要手動計算或從其他來源取得
+    }));
 
-    if (twseRes.status === 'fulfilled') {
-      twseRes.value.data.forEach(s => {
-        unifiedData.push({
-          stock_id: s.Code,
-          stock_name: s.Name,
-          open: parseFloat(s.OpeningPrice) || 0,
-          max: parseFloat(s.HighestPrice) || 0,
-          min: parseFloat(s.LowestPrice) || 0,
-          close: parseFloat(s.ClosingPrice) || 0,
-          change: parseFloat(s.Change) || 0,
-          volume: parseInt(s.TradeVolume.replace(/,/g, '')) || 0,
-          turnover: parseInt(s.TradeValue.replace(/,/g, '')) || 0,
-          market: 'TWSE',
-          date: today
-        });
-      });
-    }
+    const tpexData: UnifiedStockData[] = (tpexRes.data || []).map((item: Record<string, unknown>) => ({
+      stock_id: String(item.SecId || ""),
+      stock_name: String(item.Name || ""),
+      open: parseFloat(item.Open || "0"),
+      high: parseFloat(item.High || "0"),
+      low: parseFloat(item.Low || "0"),
+      close: parseFloat(item.Close || "0"),
+      volume: parseInt(item.Volume || "0"),
+      change: parseFloat(item.Chg || "0"),
+      change_percent: parseFloat(item.ChgPct || "0")
+    }));
 
-    if (tpexRes.status === 'fulfilled') {
-      tpexRes.value.data.forEach(s => {
-        unifiedData.push({
-          stock_id: s.SecuritiesCompanyCode,
-          stock_name: s.CompanyName,
-          open: parseFloat(s.Open) || 0,
-          max: parseFloat(s.High) || 0,
-          min: parseFloat(s.Low) || 0,
-          close: parseFloat(s.Close) || 0,
-          change: parseFloat(s.Change) || 0,
-          volume: parseInt(s.TradingShares.replace(/,/g, '')) || 0,
-          turnover: parseInt(s.TransactionAmount.replace(/,/g, '')) || 0,
-          market: 'TPEx',
-          date: s.Date || today
-        });
-      });
-    }
+    return [...twseData, ...tpexData];
+  } catch (err) {
+    console.error("無法取得全市場股票資料:", err);
+    return [];
+  }
+};
 
-    return unifiedData;
-  } catch (error) {
-    console.error('Error fetching official market data:', error);
+export const fetchStockHistory = async (stockId: string): Promise<StockPrice[]> => {
+  try {
+    // 實際上應根據日期區間請求 API，此處先模擬快取或靜態資料
+    // 部分 API 限制僅能取得當日全盤資料，歷史資料通常需要付費或特定路徑
+    console.log(`正在請求 ${stockId} 的歷史資料...`);
+    return [];
+  } catch (err) {
+    console.error(`無法取得 ${stockId} 歷史資料:`, err);
     return [];
   }
 };
 
 export const fetchFuturesData = async (): Promise<TAIFEXQuote[]> => {
   try {
-    const res = await axios.get<TAIFEXQuote[]>(TAIFEX_URL);
-    // Filter for core products like TX (TAIEX Futures)
-    return res.data.filter(q => q.ProductCode === 'TX' || q.ProductCode === 'MTX');
-  } catch (error) {
-    console.error('Error fetching TAIFEX data:', error);
+    const res = await axios.get<unknown>(TAIFEX_URL);
+    
+    // The API might return an array directly or an object with a data property
+    const rawData = res.data as Record<string, unknown>;
+    const dataArray = Array.isArray(rawData) ? rawData : (rawData && Array.isArray(rawData.data) ? rawData.data : null);
+    
+    if (!dataArray) {
+      throw new Error("Invalid TAIFEX data format");
+    }
+ 
+    // Map common TAIFEX API fields to our interface if they differ (e.g. Contract -> ProductCode)
+    return dataArray.map((q: Record<string, unknown>) => ({
+      Date: String(q.Date || q.date || ""),
+      ProductCode: String(q.ProductCode || q.Contract || q.product_id || ""),
+      ContractMonth: String(q.ContractMonth || q['ContractMonth(Week)'] || q.delivery_month || ""),
+      Open: parseFloat(q.Open || q.open || "0"),
+      High: parseFloat(q.High || q.high || "0"),
+      Low: parseFloat(q.Low || q.low || "0"),
+      Close: parseFloat(q.Close || q.close || "0"),
+      Trading_Volume: parseInt(q.Volume || q.Trading_Volume || "0"),
+      Settlement_Price: q.SettlementPrice ? parseFloat(q.SettlementPrice) : undefined
+    }));
+  } catch (err) {
+    console.error("無法取得期貨行情:", err);
     return [];
   }
 };
