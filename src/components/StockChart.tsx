@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState, useCallback } from "react"
 import * as d3 from "d3"
 import { type StockPrice } from "../services/api"
 
@@ -9,148 +9,211 @@ interface StockChartProps {
 
 export default function StockChart({ data, stockName }: StockChartProps) {
   const svgRef = useRef<SVGSVGElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [dimensions, setDimensions] = useState({ width: 800, height: 480 })
+
+  const handleResize = useCallback(() => {
+    if (containerRef.current) {
+      setDimensions({
+        width: containerRef.current.clientWidth,
+        height: 480
+      })
+    }
+  }, [])
+
+  useEffect(() => {
+    handleResize()
+    window.addEventListener("resize", handleResize)
+    return () => window.removeEventListener("resize", handleResize)
+  }, [handleResize])
 
   useEffect(() => {
     if (!data || data.length === 0 || !svgRef.current) return
 
-    // 清除舊圖表
     d3.select(svgRef.current).selectAll("*").remove()
 
-    const margin = { top: 20, right: 30, bottom: 40, left: 50 }
-    const width = svgRef.current.parentElement?.clientWidth || 800
-    const innerWidth = width - margin.left - margin.right
-    const height = 300
-    const innerHeight = height - margin.top - margin.bottom
+    const margin = { top: 20, right: 60, bottom: 40, left: 70 }
+    const width = dimensions.width - margin.left - margin.right
+    const totalHeight = dimensions.height - margin.top - margin.bottom
+    const priceHeight = totalHeight * 0.72
+    const volumeHeight = totalHeight * 0.18
+    const gap = totalHeight * 0.1
 
     const svg = d3.select(svgRef.current)
-      .attr("width", width)
-      .attr("height", height)
-      .append("g")
-      .attr("transform", `translate(${margin.left},${margin.top})`)
+      .attr("width", dimensions.width)
+      .attr("height", dimensions.height)
 
-    // 解析日期且排序 (FinMind 有時日期順序會亂)
     const parseTime = d3.timeParse("%Y-%m-%d")
     const sortedData = [...data].sort((a, b) => (parseTime(a.date)?.getTime() || 0) - (parseTime(b.date)?.getTime() || 0))
 
-    // 定義比例尺
-    const x = d3.scaleTime()
-      .domain(d3.extent(sortedData, d => parseTime(d.date) as Date) as [Date, Date])
-      .range([0, innerWidth])
+    const x = d3.scaleBand()
+      .domain(sortedData.map(d => d.date))
+      .range([0, width])
+      .padding(0.3)
 
-    const y = d3.scaleLinear()
-      .domain([
-        d3.min(sortedData, d => d.close) || 0 * 0.98,
-        d3.max(sortedData, d => d.close) || 100 * 1.02
-      ] as [number, number])
-      .range([innerHeight, 0])
+    const minLow = d3.min(sortedData, d => d.min) ?? 0
+    const maxHigh = d3.max(sortedData, d => d.max) ?? 100
+    const pricePadding = (maxHigh - minLow) * 0.05
 
-    const yVol = d3.scaleLinear()
-      .domain([0, d3.max(sortedData, d => d.volume) || 1000] as [number, number])
-      .range([innerHeight, innerHeight * 0.7])
+    const yPrice = d3.scaleLinear()
+      .domain([minLow - pricePadding, maxHigh + pricePadding])
+      .range([priceHeight, 0])
 
-    // 配置 X 軸
-    svg.append("g")
-      .attr("transform", `translate(0,${innerHeight})`)
-      .call(d3.axisBottom(x).ticks(5).tickFormat(d3.timeFormat("%m/%d") as any))
-      .attr("class", "text-muted-foreground opacity-50")
+    const maxVol = d3.max(sortedData, d => d.Trading_Volume ?? d.volume ?? 0) ?? 1
+    const yVolume = d3.scaleLinear()
+      .domain([0, maxVol * 1.1])
+      .range([volumeHeight, 0])
 
-    // 配置 Y 軸
-    svg.append("g")
-      .call(d3.axisLeft(y).ticks(5))
-      .attr("class", "text-muted-foreground opacity-50")
+    const priceGroup = svg.append("g")
+      .attr("transform", `translate(${margin.left},${margin.top})`)
 
-    // 漸層背景
-    const areaGradient = svg.append("defs")
-      .append("linearGradient")
-      .attr("id", "area-gradient")
-      .attr("x1", "0%").attr("y1", "0%")
-      .attr("x2", "0%").attr("y2", "100%")
+    const volumeGroup = svg.append("g")
+      .attr("transform", `translate(${margin.left},${margin.top + priceHeight + gap})`)
 
-    areaGradient.append("stop")
-      .attr("offset", "0%")
-      .attr("stop-color", "hsl(var(--primary))")
-      .attr("stop-opacity", 0.3)
+    // Grid lines
+    priceGroup.selectAll(".grid-line")
+      .data(yPrice.ticks(6))
+      .enter().append("line")
+      .attr("x1", 0).attr("x2", width)
+      .attr("y1", d => yPrice(d)).attr("y2", d => yPrice(d))
+      .attr("stroke", "hsl(var(--muted-foreground))")
+      .attr("stroke-opacity", 0.08)
+      .attr("stroke-dasharray", "3,3")
 
-    areaGradient.append("stop")
-      .attr("offset", "100%")
-      .attr("stop-color", "hsl(var(--primary))")
-      .attr("stop-opacity", 0)
+    // Axes
+    priceGroup.append("g")
+      .attr("transform", `translate(0,${priceHeight})`)
+      .call(d3.axisBottom(x).tickValues(x.domain().filter((_, i) => i % Math.ceil(sortedData.length / 6) === 0)).tickFormat((d: string) => {
+        const parsed = parseTime(d)
+        return parsed ? d3.timeFormat("%m/%d")(parsed) : d
+      }))
+      .selectAll("text")
+      .attr("class", "text-[10px] fill-muted-foreground")
 
-    // 繪製趨勢線
-    const line = d3.line<StockPrice>()
-      .x(d => x(parseTime(d.date) as Date))
-      .y(d => y(d.close))
-      .curve(d3.curveMonotoneX)
+    priceGroup.append("g")
+      .call(d3.axisRight(yPrice).ticks(6).tickFormat(d => Number(d).toFixed(0)))
+      .selectAll("text")
+      .attr("class", "text-[10px] fill-muted-foreground")
 
-    svg.append("path")
-      .datum(sortedData)
-      .attr("fill", "none")
-      .attr("stroke", "hsl(var(--primary))")
-      .attr("stroke-width", 2)
-      .attr("d", line)
+    volumeGroup.append("g")
+      .call(d3.axisRight(yVolume).ticks(3).tickFormat(d => {
+        const val = Number(d)
+        if (val >= 1e6) return (val / 1e6).toFixed(1) + "M"
+        if (val >= 1e3) return (val / 1e3).toFixed(0) + "K"
+        return val.toFixed(0)
+      }))
+      .selectAll("text")
+      .attr("class", "text-[10px] fill-muted-foreground")
 
-    // 繪製漸層面積
-    const area = d3.area<StockPrice>()
-      .x(d => x(parseTime(d.date) as Date))
-      .y0(innerHeight)
-      .y1(d => y(d.close))
-      .curve(d3.curveMonotoneX)
+    const candleWidth = Math.max(x.bandwidth() * 0.75, 4)
 
-    svg.append("path")
-      .datum(sortedData)
-      .attr("fill", "url(#area-gradient)")
-      .attr("d", area)
-
-    // 繪製成交量柱狀
-    svg.selectAll(".bar")
+    // Candlestick bodies
+    priceGroup.selectAll(".candle-body")
       .data(sortedData)
       .enter().append("rect")
-      .attr("class", "bar")
-      .attr("x", d => x(parseTime(d.date) as Date) - 2)
-      .attr("y", d => yVol(d.volume))
-      .attr("width", 4)
-      .attr("height", d => innerHeight - yVol(d.volume))
-      .attr("fill", "hsl(var(--muted-foreground))")
-      .attr("opacity", 0.2)
+      .attr("class", "candle-body")
+      .attr("x", d => (x(d.date) ?? 0) + (x.bandwidth() - candleWidth) / 2)
+      .attr("y", d => {
+        const bodyTop = Math.max(d.open, d.close)
+        return yPrice(bodyTop)
+      })
+      .attr("width", candleWidth)
+      .attr("height", d => {
+        const bodyHeight = Math.abs(d.open - d.close)
+        return Math.max(yPrice(Math.min(d.open, d.close)) - yPrice(Math.max(d.open, d.close)), 1)
+      })
+      .attr("fill", d => d.close >= d.open ? "#ef4444" : "#10b981")
+      .attr("rx", 1)
 
-    // 互動點 (Tooltip 邏輯)
-    const focus = svg.append("g").style("display", "none")
-    focus.append("circle").attr("r", 5).attr("fill", "hsl(var(--primary))").attr("stroke", "white").attr("stroke-width", 2)
+    // Candlestick wicks
+    priceGroup.selectAll(".candle-wick")
+      .data(sortedData)
+      .enter().append("line")
+      .attr("class", "candle-wick")
+      .attr("x1", d => (x(d.date) ?? 0) + x.bandwidth() / 2)
+      .attr("x2", d => (x(d.date) ?? 0) + x.bandwidth() / 2)
+      .attr("y1", d => yPrice(d.max))
+      .attr("y2", d => yPrice(d.min))
+      .attr("stroke", d => d.close >= d.open ? "#ef4444" : "#10b981")
+      .attr("stroke-width", 1.2)
 
-    const tooltip = d3.select("body").append("div")
-      .attr("class", "absolute hidden bg-popover text-popover-foreground p-2 rounded shadow-lg border text-xs pointer-events-none z-50")
+    // Volume bars
+    volumeGroup.selectAll(".vol-bar")
+      .data(sortedData)
+      .enter().append("rect")
+      .attr("class", "vol-bar")
+      .attr("x", d => (x(d.date) ?? 0) + (x.bandwidth() - candleWidth) / 2)
+      .attr("y", d => yVolume(d.Trading_Volume ?? d.volume ?? 0))
+      .attr("width", candleWidth)
+      .attr("height", d => volumeHeight - yVolume(d.Trading_Volume ?? d.volume ?? 0))
+      .attr("fill", d => d.close >= d.open ? "#ef4444" : "#10b981")
+      .attr("opacity", 0.45)
+      .attr("rx", 1)
 
-    svg.append("rect")
-      .attr("width", innerWidth)
-      .attr("height", innerHeight)
+    // Separator line
+    svg.append("line")
+      .attr("x1", margin.left).attr("x2", margin.left + width)
+      .attr("y1", margin.top + priceHeight + gap / 2)
+      .attr("y2", margin.top + priceHeight + gap / 2)
+      .attr("stroke", "hsl(var(--muted-foreground))")
+      .attr("stroke-opacity", 0.15)
+      .attr("stroke-dasharray", "4,4")
+
+    // Tooltip overlay
+    const focusGroup = priceGroup.append("g").style("display", "none")
+    focusGroup.append("line")
+      .attr("class", "crosshair-v")
+      .attr("y1", 0).attr("y2", priceHeight)
+      .attr("stroke", "hsl(var(--primary))")
+      .attr("stroke-opacity", 0.4)
+      .attr("stroke-dasharray", "3,3")
+
+    const tooltipDiv = d3.select("body").append("div")
+      .attr("class", "fixed hidden bg-popover text-popover-foreground p-3 rounded-lg shadow-xl border text-xs pointer-events-none z-50 min-w-[160px]")
+
+    const hoverRect = priceGroup.append("rect")
+      .attr("width", width)
+      .attr("height", priceHeight)
       .attr("fill", "transparent")
-      .on("mouseover", () => { focus.style("display", null); tooltip.style("display", "block"); })
-      .on("mouseout", () => { focus.style("display", "none"); tooltip.style("display", "none"); })
-      .on("mousemove", (event) => {
-        const mouseX = d3.pointer(event)[0]
-        const dateAtMouse = x.invert(mouseX)
-        const bisectDate = d3.bisector((d: StockPrice) => parseTime(d.date)).left
-        const i = bisectDate(sortedData, dateAtMouse, 1)
-        const d0 = sortedData[i - 1]
-        const d1 = sortedData[i]
-        const d = dateAtMouse.getTime() - (parseTime(d0.date)?.getTime() || 0) > (parseTime(d1?.date)?.getTime() || 0) - dateAtMouse.getTime() ? d1 : d0
+      .on("mousemove touchmove", function(event) {
+        const [mouseX] = d3.pointer(event)
+        const dateAtMouse = x.domain()[Math.round(mouseX / (width / sortedData.length))] ?? sortedData[0]?.date
+        const d = sortedData.find(s => s.date === dateAtMouse)
+        if (!d) return
 
-        if (d) {
-          focus.attr("transform", `translate(${x(parseTime(d.date) as Date)},${y(d.close)})`)
-          tooltip
-            .html(`<strong>${d.date}</strong><br/>價格: ${d.close}<br/>量: ${d.volume.toLocaleString()}`)
-            .style("left", (event.pageX + 10) + "px")
-            .style("top", (event.pageY - 10) + "px")
-        }
+        const xPos = (x(d.date) ?? 0) + x.bandwidth() / 2
+        focusGroup.style("display", null).attr("transform", `translate(${xPos},0)`)
+        focusGroup.select(".crosshair-v")
+          .attr("x1", 0).attr("x2", 0)
+
+        const isUp = d.close >= d.open
+        tooltipDiv
+          .style("display", "block")
+          .html(`
+            <div class="font-bold mb-1">${d.date}</div>
+            <div class="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
+              <span class="text-muted-foreground">開:</span><span>${d.open.toFixed(2)}</span>
+              <span class="text-muted-foreground">高:</span><span>${d.max.toFixed(2)}</span>
+              <span class="text-muted-foreground">低:</span><span>${d.min.toFixed(2)}</span>
+              <span class="text-muted-foreground">收:</span><span class="${isUp ? 'text-red-500' : 'text-emerald-500'} font-bold">${d.close.toFixed(2)}</span>
+              <span class="text-muted-foreground">量:</span><span>${(d.Trading_Volume ?? d.volume ?? 0).toLocaleString()}</span>
+            </div>
+          `)
+          .style("left", (event.pageX + 16) + "px")
+          .style("top", (event.pageY - 10) + "px")
+      })
+      .on("mouseleave", () => {
+        focusGroup.style("display", "none")
+        tooltipDiv.style("display", "none")
       })
 
-  }, [data])
+  }, [data, dimensions])
 
   return (
-    <div className="w-full h-[300px]">
-      <div className="flex justify-between items-center mb-4">
-        <h4 className="text-sm font-semibold text-primary">{stockName} 10 日走勢圖</h4>
-        <span className="text-xs text-muted-foreground font-mono uppercase tracking-tighter">D3.js Visualization</span>
+    <div ref={containerRef} className="w-full">
+      <div className="flex justify-between items-center mb-4 px-2">
+        <h4 className="text-sm font-semibold text-primary">{stockName} K 線圖</h4>
+        <span className="text-xs text-muted-foreground font-mono uppercase tracking-tighter">D3.js Candlestick</span>
       </div>
       <svg ref={svgRef} className="overflow-visible"></svg>
     </div>
