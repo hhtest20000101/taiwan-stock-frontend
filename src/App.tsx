@@ -85,6 +85,7 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
   const [allStockDataMap, setAllStockDataMap] = useState<Record<string, UnifiedStockData>>({})
+  const [marketMaintenance, setMarketMaintenance] = useState(false)
   
   // Backtest State
   const [sidebarTab, setSidebarTab] = useState<'analysis' | 'backtest'>('analysis')
@@ -112,7 +113,16 @@ export default function App() {
           infoMap[info.stock_id] = info;
         });
         setAllStockDataMap(infoMap);
-        setFutures(futuresData);
+        
+        if (futuresData.status === 'SUCCESS') {
+          setFutures(futuresData.data || []);
+          setMarketMaintenance(false);
+        } else if (futuresData.status === 'MAINTENANCE') {
+          setFutures([]);
+          setMarketMaintenance(true);
+        } else {
+          setFutures([]);
+        }
 
         // 2. 抓取初始權值股數據 (從 API 獲取詳細歷史以利分析)
         const stockIds = ["2330", "2317", "2454", "2382"]
@@ -460,6 +470,11 @@ export default function App() {
                  <span>FLAT:</span> 
                  <span className="text-sm tracking-tighter">{sentiment.unchanged}</span>
                </span>
+                {marketMaintenance && (
+                  <Badge variant="destructive" className="animate-pulse ml-4 border-white/20 bg-rose-500/20 text-rose-400 h-6">
+                    期交所維護中 (MAINTENANCE)
+                  </Badge>
+                )}
              </div>
            </div>
            
