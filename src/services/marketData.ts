@@ -1,29 +1,22 @@
 import axios from 'axios';
 import type { AxiosRequestConfig } from 'axios';
-import type { StockPrice } from './api';
+import { getEnv, getBaseUrl } from '../utils/envHelper';
 
 /**
- * 系統層：定義標準的交易訊號輸出格式 (供後續策略層使用)
+ * 系統層：標準化資料回應格式 (含快取標記)
  */
-export interface TradingSignal {
-    action: 'BUY' | 'SELL' | 'HOLD';
-    score: number;
-    reason: string;
-}
-
-/**
- * 系統層：資料回應封裝格式 (支援維護模式偵測)
- */
-export interface DataResponse<T> {
+export interface MarketDataResponse<T> {
   status: 'SUCCESS' | 'MAINTENANCE' | 'ERROR';
-  data: T | null;
+  payload: T | null;
+  isFallback: boolean;
+  lastUpdated?: string;
   message?: string;
 }
 
 export interface UnifiedStockData {
   stock_id: string;
   stock_name: string;
-  symbol: string; // 標準格式 [Code].TW or [Code].TWO
+  symbol: string;
   open: number;
   high: number;
   low: number;
@@ -50,47 +43,103 @@ export interface TAIFEXQuote {
   Settlement_Price?: number;
 }
 
+// 快取版本 Key (防止結構變更衝突)
+const CACHE_VERSION = 'v1';
+const STORAGE_KEYS = {
+    FUTURES: `market-cache-futures-${CACHE_VERSION}`,
+    STOCKS: `market-cache-stocks-${CACHE_VERSION}`
+};
+
+// 系統層：定義期貨行情需要優先過濾顯示的商品代碼
+const priorityProducts = ['TX', 'MTX', 'TE', 'TF'];
+
 /**
- * 系統層：具備重試機制的高階非同步 API 請求函式
- * @param {string} url - API 路徑
- * @param {AxiosRequestConfig} config - 請求配置
- * @param {number} retries - 最大重試次數 (預設 3)
+ * 系統層：具備 LocalStorage 備援機制的非同步請求函式
  */
-async function fetchWithRetry<T>(url: string, config: AxiosRequestConfig = {}, retries: number = 3): Promise<T> {
-    for (let attempt = 1; attempt <= retries; attempt++) {
-        try {
-            const response = await axios(url, config);
-            return response.data;
-        } catch (error: unknown) {
-            const isLastAttempt = attempt === retries;
-            const message = error instanceof Error ? error.message : String(error);
-            console.warn(`[Network] API 請求失敗 (${attempt}/${retries}): ${url}`, message);
-            
-            if (isLastAttempt) {
-                throw new Error(`連線失敗已達上限: ${url}. 錯誤: ${message}`);
+async function fetchWithCacheFallback<T>(
+    url: string, 
+    storageKey: string,
+    config: AxiosRequestConfig = {}, 
+    retries: number = 2
+): Promise<MarketDataResponse<T>> {
+    const isBrowser = typeof window !== 'undefined';
+
+    const fetchFresh = async () => {
+        for (let attempt = 1; attempt <= retries; attempt++) {
+            try {
+                const response = await axios(url, { ...config, timeout: 5000 });
+                return response.data;
+            } catch (error) {
+                if (attempt === retries) throw error;
+                await new Promise(r => setTimeout(r, 1000 * attempt));
             }
-            // 指數退避: 1s, 2s, 4s...
-            await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt - 1)));
         }
+    };
+
+    try {
+        const freshData = await fetchFresh();
+        
+        if (isBrowser) {
+            const payload = {
+                data: freshData,
+                timestamp: new Date().toISOString()
+            };
+            localStorage.setItem(storageKey, JSON.stringify(payload));
+        }
+
+        return {
+            status: 'SUCCESS',
+            payload: freshData,
+            isFallback: false,
+            lastUpdated: new Date().toISOString()
+        };
+    } catch (error: any) {
+        console.warn(`[Data Layer] API 請求失敗，嘗試啟動離線備援 (${url}):`, error.message);
+        
+        if (isBrowser) {
+            const cachedStr = localStorage.getItem(storageKey);
+            if (cachedStr) {
+                try {
+                    const cached = JSON.parse(cachedStr);
+                    return {
+                        status: 'SUCCESS',
+                        payload: cached.data,
+                        isFallback: true,
+                        lastUpdated: cached.timestamp,
+                        message: "API 連線失敗，已自動切換至離線快取"
+                    };
+                } catch (e) {
+                    console.error("[Data Layer] 快取解析失敗:", e);
+                }
+            }
+        }
+
+        return {
+            status: 'ERROR',
+            payload: null,
+            isFallback: false,
+            message: error.message || "連線與快取皆已失效"
+        };
     }
-    throw new Error('Unreachable code');
 }
 
 /**
- * 資料層：取得全市場股票資料 (含邊界過濾與標準化)
+ * 資料層：取得全市場股票資料
+ * 邏輯修正：確保 Node/Browser 都能取得正確路徑
  */
-export const fetchAllStocks = async (): Promise<UnifiedStockData[]> => {
+export const fetchAllStocks = async (): Promise<MarketDataResponse<UnifiedStockData[]>> => {
+  const twseBase = getBaseUrl('twse');
+  const tpexBase = getBaseUrl('tpex');
+  
+  // 修正：TWSE 需要 /v1/，TPEX 需要 /openapi/v1/
+  const twseEndpoint = `${twseBase}/v1/exchangeReport/STOCK_DAY_ALL?response=open_data`;
+  const tpexEndpoint = `${tpexBase}/openapi/v1/tpex_mainboard_quotes`;
+
   try {
-    const twseEndpoint = import.meta.env.VITE_TWSE_API_URL || '/api/twse/v1/exchangeReport/STOCK_DAY_ALL?response=open_data';
-    const tpexEndpoint = import.meta.env.VITE_TPEX_API_URL || '/api/tpex/openapi/v1/tpex_mainboard_quotes';
+    const twseRes = await fetchWithCacheFallback<any[]>(twseEndpoint, STORAGE_KEYS.STOCKS + '-twse');
+    const tpexRes = await fetchWithCacheFallback<any[]>(tpexEndpoint, STORAGE_KEYS.STOCKS + '-tpex');
 
-    const [twseRaw, tpexRaw] = await Promise.all([
-      fetchWithRetry<Record<string, string>[]>(twseEndpoint),
-      fetchWithRetry<Record<string, string>[]>(tpexEndpoint)
-    ]);
-
-    const twseData: UnifiedStockData[] = (twseRaw || [])
-      .map((item) => ({
+    const mappedTwse = (twseRes.payload || []).map(item => ({
         stock_id: String(item.Code || ""),
         stock_name: String(item.Name || ""),
         symbol: `${item.Code}.TW`,
@@ -102,12 +151,9 @@ export const fetchAllStocks = async (): Promise<UnifiedStockData[]> => {
         change: parseFloat(item.Change || "0"),
         change_percent: 0,
         market: 'TWSE' as const
-      }))
-      // 邊界檢查：過濾無效價格 (NaN 或 null) 與暫停交易標的
-      .filter(item => !isNaN(item.close) && item.close !== 0);
+    })).filter(item => !isNaN(item.close) && item.close !== 0);
 
-    const tpexData: UnifiedStockData[] = (tpexRaw || [])
-      .map((item) => ({
+    const mappedTpex = (tpexRes.payload || []).map(item => ({
         stock_id: String(item.SecId || ""),
         stock_name: String(item.Name || ""),
         symbol: `${item.SecId}.TWO`,
@@ -119,106 +165,92 @@ export const fetchAllStocks = async (): Promise<UnifiedStockData[]> => {
         change: parseFloat(item.Chg || "0"),
         change_percent: parseFloat(item.ChgPct || "0"),
         market: 'OTC' as const
-      }))
-      .filter(item => !isNaN(item.close) && item.close !== 0);
+    })).filter(item => !isNaN(item.close) && item.close !== 0);
 
-    return [...twseData, ...tpexData];
+    const stocks = [...mappedTwse, ...mappedTpex];
+    console.log(`[Data Layer] 取得股票總數: ${stocks.length} (TWSE: ${mappedTwse.length}, OTC: ${mappedTpex.length})`);
+
+    return {
+        status: (twseRes.status === 'ERROR' && tpexRes.status === 'ERROR') ? 'ERROR' : 'SUCCESS',
+        payload: stocks,
+        isFallback: twseRes.isFallback || tpexRes.isFallback,
+        lastUpdated: twseRes.lastUpdated || tpexRes.lastUpdated
+    };
   } catch (err) {
-    console.error("[Data Layer] fetchAllStocks 失敗:", err);
-    return [];
+    return { status: 'ERROR', payload: null, isFallback: false };
   }
-};
-
-export const fetchStockHistory = async (stockId: string): Promise<StockPrice[]> => {
-  console.log(`正在請求 ${stockId} 的歷史資料...`);
-  return [];
 };
 
 /**
- * 資料層：取得期貨行情 (含維護狀態攔截與 JSON 解析防護)
+ * 資料層：取得期貨行情
  */
-export const fetchFuturesData = async (): Promise<DataResponse<TAIFEXQuote[]>> => {
+export const fetchFuturesData = async (): Promise<MarketDataResponse<TAIFEXQuote[]>> => {
+  const taifexBase = getBaseUrl('taifex');
+  const endpoint = `${taifexBase}/v1/DailyMarketReportFut`;
+  
+  const response = await fetchWithCacheFallback<any>(endpoint, STORAGE_KEYS.FUTURES, {
+      headers: { 'Accept': 'application/json' }
+  });
+
+  if (!response.payload) return response;
+
   try {
-    const endpoint = import.meta.env.VITE_TAIFEX_API_URL || '/api/taifex/v1/DailyMarketReportFut';
-    
-    // 強制以 text 解析以檢查是否為 HTML (維護頁面)
-    const rawContent = await fetchWithRetry<string>(endpoint, {
-        headers: { 'Accept': 'application/json' },
-        responseType: 'text'
-    });
-
-    // 邊界檢查：攔截 HTML 維護頁面
-    if (typeof rawContent === 'string' && rawContent.toLowerCase().includes('<!doctype html>')) {
-        throw new Error('MAINTENANCE_MODE: 期交所服務維護中');
-    }
-
-    // 安全轉換為 JSON
-    const rawData = typeof rawContent === 'string' ? JSON.parse(rawContent) : rawContent;
-    
-    // 相容性處理：解構 Data 屬性
-    let dataArray: Record<string, unknown>[] | null = null;
-    if (Array.isArray(rawData)) {
-      dataArray = rawData as Record<string, unknown>[];
-    } else if (rawData && typeof rawData === 'object') {
-      const obj = rawData as Record<string, unknown>;
-      if (Array.isArray(obj.Data)) {
-        dataArray = obj.Data as Record<string, unknown>[];
-      } else if (Array.isArray(obj.data)) {
-        dataArray = obj.data as Record<string, unknown>[];
+      const raw = response.payload;
+      if (typeof raw === 'string' && raw.toLowerCase().includes('<!doctype html>')) {
+          return { status: 'MAINTENANCE', payload: null, isFallback: false, message: '期交所維護中' };
       }
-    }
-    
-    if (!dataArray) {
-      throw new Error("無效的資料格式 - 找不到資料陣列");
-    }
 
-    const priorityProducts = ['TX', 'MTX', 'TE', 'TF'];
-    const parseNum = (v: unknown) => {
-      const n = parseFloat(String(v || "0").replace(/,/g, ''));
-      return isNaN(n) ? 0 : n;
-    };
+      let dataArray: any[] = [];
+      if (Array.isArray(raw)) {
+        dataArray = raw;
+      } else if (raw.Data && Array.isArray(raw.Data)) {
+        dataArray = raw.Data;
+      } else if (raw.data && Array.isArray(raw.data)) {
+        dataArray = raw.data;
+      }
 
-    const mappedData = dataArray.map((q) => ({
-      Date: String(q.Date || q.date || ""),
-      ProductCode: String(q.Contract || q.ProductCode || q.product_id || "").trim(),
-      ContractMonth: String(q['ContractMonth(Week)'] || q.ContractMonth || q.delivery_month || "").trim(),
-      Open: parseNum(q.Open || q.open),
-      High: parseNum(q.High || q.high),
-      Low: parseNum(q.Low || q.low),
-      Close: parseNum(q.Last || q.Close || q.close),
-      PriceChange: String(q.Change || "0"),
-      PriceChangePercent: String(q['%'] || "0"),
-      Trading_Volume: parseNum(q.Volume || q.Trading_Volume),
-      Volume: parseNum(q.Volume || q.Trading_Volume),
-      Settlement_Price: q.SettlementPrice ? parseNum(q.SettlementPrice || "0") : undefined
-    }));
+      const parseNum = (v: any) => {
+        const n = parseFloat(String(v || "0").replace(/,/g, ''));
+        return isNaN(n) ? 0 : n;
+      };
 
-    // 過濾熱門商品與短天期合約
-    const uniqueMap = new Map<string, TAIFEXQuote>();
-    mappedData
-      .filter((item) => priorityProducts.includes(item.ProductCode) && item.ContractMonth.length <= 6)
-      .forEach((item) => {
-        const key = `${item.ProductCode}-${item.ContractMonth}`;
-        if (!uniqueMap.has(key)) uniqueMap.set(key, item);
-      });
+      const mappedData: TAIFEXQuote[] = dataArray.map((q: any) => ({
+        Date: String(q.Date || q.date || ""),
+        ProductCode: String(q.Contract || q.ProductCode || q.product_id || "").trim(),
+        ContractMonth: String(q['ContractMonth(Week)'] || q.ContractMonth || q.delivery_month || "").trim(),
+        Open: parseNum(q.Open || q.open),
+        High: parseNum(q.High || q.high),
+        Low: parseNum(q.Low || q.low),
+        Close: parseNum(q.Last || q.Close || q.close),
+        PriceChange: String(q.Change || "0"),
+        PriceChangePercent: String(q['%'] || "0"),
+        Trading_Volume: parseNum(q.Volume || q.Trading_Volume),
+        Volume: parseNum(q.Volume || q.Trading_Volume),
+        Settlement_Price: q.SettlementPrice ? parseNum(q.SettlementPrice || "0") : undefined
+      }));
 
-    return {
-      status: 'SUCCESS',
-      data: Array.from(uniqueMap.values()).sort((a, b) => {
-        if (a.ProductCode !== b.ProductCode) {
-          return priorityProducts.indexOf(a.ProductCode) - priorityProducts.indexOf(b.ProductCode);
-        }
-        return a.ContractMonth.localeCompare(b.ContractMonth);
-      })
-    };
+      const uniqueMap = new Map<string, TAIFEXQuote>();
+      mappedData
+        .filter((item) => priorityProducts.includes(item.ProductCode) && item.ContractMonth.length <= 6)
+        .forEach((item) => {
+          const key = `${item.ProductCode}-${item.ContractMonth}`;
+          if (!uniqueMap.has(key)) uniqueMap.set(key, item);
+        });
 
-  } catch (err: unknown) {
-    const error = err as Error;
-    if (error.message.includes('MAINTENANCE_MODE')) {
-        console.warn('[Data Layer] 期交所目前暫停服務 (維護中)');
-        return { status: 'MAINTENANCE', data: null, message: error.message }; 
-    }
-    console.error("[Data Layer] fetchFuturesData 失敗:", err);
-    return { status: 'ERROR', data: null, message: error.message };
+      return {
+        ...response,
+        payload: Array.from(uniqueMap.values()).sort((a, b) => {
+          if (a.ProductCode !== b.ProductCode) {
+            return priorityProducts.indexOf(a.ProductCode) - priorityProducts.indexOf(b.ProductCode);
+          }
+          return a.ContractMonth.localeCompare(b.ContractMonth);
+        })
+      };
+  } catch (err) {
+      return { ...response, status: 'ERROR', message: '解析期貨資料失敗' };
   }
+};
+
+export const fetchStockHistory = async (stockId: string): Promise<any[]> => {
+    return [];
 };

@@ -1,12 +1,13 @@
 import { useState, useEffect, useMemo, useCallback } from "react"
-import { BarChart3, Search, Bell, User, Loader2, Star, Trash2, FileJson, FileSpreadsheet, Activity, LayoutGrid, List, Globe } from "lucide-react"
+import { BarChart3, Search, Bell, User, Loader2, Star, Trash2, FileJson, FileSpreadsheet, Activity, LayoutGrid, List, Globe, RefreshCw } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { getStockRecentPrice, getUSStockPrice, getStockHistoricalPrice, type StockPrice, type USStockPrice } from "./services/api"
-import { fetchAllStocks, fetchFuturesData, type UnifiedStockData, type TAIFEXQuote } from "./services/marketData"
+import { type UnifiedStockData, type TAIFEXQuote } from "./services/marketData"
+import { useFutures, useAllStocks } from "./hooks/useMarketData"
 import { getWatchlist, addToWatchlist, removeFromWatchlist, type WatchlistEntry } from "./services/db"
 import { getInstitutionalData, type InstitutionalSummary } from "./services/institutional"
 import { runBacktest, type BacktestResult } from "./services/backtest"
@@ -16,6 +17,7 @@ import { technicalAnalyzer } from "./skills/TechnicalAnalyzer"
 import { sentimentScout } from "./skills/SentimentScout"
 import { macroLinkage } from "./skills/MacroLinkage"
 import type { ExpertReport as BaseReport } from "./skills/types"
+import { MarketScanner } from "./components/MarketScanner"
 
 interface CompositeExpertReport {
   tech: BaseReport;
@@ -71,10 +73,11 @@ const SECTORS = [
 ]
 
 export default function App() {
-  const [loading, setLoading] = useState(true)
+  const { data: futuresRes, isLoading: fLoading, refetch: refetchFutures } = useFutures();
+  const { data: stocksRes, isLoading: sLoading, refetch: refetchStocks } = useAllStocks();
+  
   const [error, setError] = useState<string | null>(null)
   const [stocks, setStocks] = useState<UIStock[]>([])
-  const [futures, setFutures] = useState<TAIFEXQuote[]>([])
   const [marketIndices, setMarketIndices] = useState<MarketIndex[]>([])
   const [selectedStockId, setSelectedStockId] = useState<string>("2330")
   const [watchlist, setWatchlist] = useState<WatchlistEntry[]>([])
@@ -85,7 +88,11 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
   const [allStockDataMap, setAllStockDataMap] = useState<Record<string, UnifiedStockData>>({})
-  const [marketMaintenance, setMarketMaintenance] = useState(false)
+  
+  const futures = futuresRes?.payload || [];
+  const marketMaintenance = futuresRes?.status === 'MAINTENANCE';
+  const isFuturesFallback = futuresRes?.isFallback;
+  const loading = fLoading || sLoading;
   
   // Backtest State
   const [sidebarTab, setSidebarTab] = useState<'analysis' | 'backtest'>('analysis')
@@ -99,34 +106,19 @@ export default function App() {
       setWatchlist(data);
     };
     initWatchlist();
-    const fetchAllData = async () => {
-      setLoading(true)
-      try {
-        // 1. 同步抓取全台股權威資料 (上市 + 上櫃) 與 期貨資料
-        const [officialStocks, futuresData] = await Promise.all([
-          fetchAllStocks(),
-          fetchFuturesData()
-        ]);
-        
-        const infoMap: Record<string, UnifiedStockData> = {};
-        officialStocks.forEach(info => {
-          infoMap[info.stock_id] = info;
-        });
-        setAllStockDataMap(infoMap);
-        
-        if (futuresData.status === 'SUCCESS') {
-          setFutures(futuresData.data || []);
-          setMarketMaintenance(false);
-        } else if (futuresData.status === 'MAINTENANCE') {
-          setFutures([]);
-          setMarketMaintenance(true);
-        } else {
-          setFutures([]);
-        }
 
-        // 2. 抓取初始權值股數據 (從 API 獲取詳細歷史以利分析)
-        const stockIds = ["2330", "2317", "2454", "2382"]
-        const results = await Promise.all(stockIds.map(id => getStockRecentPrice(id)))
+    const fetchInitialStocks = async () => {
+      if (!stocksRes?.payload) return;
+      
+      const infoMap: Record<string, UnifiedStockData> = {};
+      stocksRes.payload.forEach(info => {
+        infoMap[info.stock_id] = info;
+      });
+      setAllStockDataMap(infoMap);
+
+      try {
+        const stockIds = ["2330", "2317", "2454", "2382"];
+        const results = await Promise.all(stockIds.map(id => getStockRecentPrice(id)));
         
         const formattedStocks = results.map((history, index) => {
           if (!history || history.length < 2) return null;
@@ -148,35 +140,33 @@ export default function App() {
             trend: diff >= 0 ? 'up' : 'down',
             rawHistory: history,
             marketType: official?.market || "TWSE"
-          } as UIStock
-        }).filter((s): s is UIStock => s !== null)
+          } as UIStock;
+        }).filter((s): s is UIStock => s !== null);
 
-        setStocks(formattedStocks)
+        setStocks(formattedStocks);
 
-        // 3. 抓取大盤指數
-        const taiexHistory = await getStockRecentPrice("TAIEX")
+        const taiexHistory = await getStockRecentPrice("TAIEX");
         if (taiexHistory && taiexHistory.length >= 2) {
-          const latest = taiexHistory[taiexHistory.length - 1]
-          const prev = taiexHistory[taiexHistory.length - 2]
-          const diff = latest.close - prev.close
-          const pct = (diff / prev.close) * 100
+          const latest = taiexHistory[taiexHistory.length - 1];
+          const prev = taiexHistory[taiexHistory.length - 2];
+          const diff = latest.close - prev.close;
+          const pct = (diff / prev.close) * 100;
           
           setMarketIndices([
             { name: "加權指數", price: latest.close.toLocaleString(), change: (diff >= 0 ? "+" : "") + diff.toFixed(2), percent: (diff >= 0 ? "+" : "") + pct.toFixed(2) + "%", trend: diff >= 0 ? 'up' : 'down', rawHistory: taiexHistory },
             { name: "成交金額 (億)", price: (latest.Trading_money / 100000000).toFixed(0), change: "", percent: "", trend: 'up' },
             { name: "更新日期", price: latest.date, change: "", percent: "", trend: 'up' }
-          ])
+          ]);
         }
-      } catch (err: unknown) {
-        console.error("Error fetching market data:", err)
-        const errorMessage = err instanceof Error ? err.message : String(err)
-        setError(errorMessage || "無法取得伺服器回應，可能由於請求過於頻繁或伺服器正在維護中。")
-      } finally {
-        setLoading(false)
+      } catch (err) {
+        console.error("Error fetching detailed market data:", err);
       }
+    };
+
+    if (stocksRes?.payload) {
+      fetchInitialStocks();
     }
-    fetchAllData()
-  }, [])
+  }, [stocksRes]);
 
   // 當選擇股票變更或主動點擊分析時執行子代理人分析
   const runExpertAnalysis = useCallback(async (stockId: string) => {
@@ -231,7 +221,10 @@ export default function App() {
     setBtDays(days);
     setBtResult(null); // 清除舊結果
     try {
-      const history = await getStockHistoricalPrice(selectedStockId, days);
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - days);
+      const startDateStr = startDate.toISOString().split('T')[0];
+      const history = await getStockHistoricalPrice(selectedStockId, startDateStr);
       if (history.length > 0) {
         const result = runBacktest(history, 'golden_cross');
         setBtResult(result);
@@ -392,7 +385,13 @@ export default function App() {
             
             {/* Market Pulse (Futures) */}
             <div className="hidden lg:flex items-center gap-6 ml-8 pl-8 border-l border-slate-100">
-              {futures.slice(0, 2).map((f) => {
+              {isFuturesFallback && (
+                <div className="flex items-center gap-1.5 px-2 py-1 bg-amber-50 rounded-lg border border-amber-100 animate-in fade-in slide-in-from-left-4 duration-500">
+                  <div className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-pulse"></div>
+                  <span className="text-[10px] font-bold text-amber-700 uppercase tracking-tighter">離線快取模式</span>
+                </div>
+              )}
+              {futures.length > 0 ? futures.slice(0, 2).map((f) => {
                 const isPositive = parseFloat(f.PriceChange) >= 0;
                 const productName = f.ProductCode === 'TX' ? '台指期' : f.ProductCode === 'MTX' ? '小台指' : f.ProductCode;
                 return (
@@ -411,7 +410,9 @@ export default function App() {
                     </div>
                   </div>
                 )
-              })}
+              }) : !loading && (
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest italic opacity-50">行情連線中...</span>
+              )}
             </div>
           </div>
           <div className="flex-1 max-w-md mx-8 hidden lg:block">
@@ -583,6 +584,11 @@ export default function App() {
                </div>
             </section>
 
+            {/* Antigravity Ultimate Scanner Section */}
+            <section className="space-y-6">
+              <MarketScanner />
+            </section>
+
             {/* Analysis & Watchlist Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
                 {/* Chart Area - Span 8 columns */}
@@ -737,9 +743,40 @@ export default function App() {
                                </Button>
                             </TableCell>
                           </TableRow>
-                        )) : (
+                        )) : loading ? (
                           <TableRow>
-                            <TableCell colSpan={10} className="text-center py-40 text-slate-200 italic font-black text-2xl tracking-widest uppercase">Fetching Market Data ...</TableCell>
+                            <TableCell colSpan={10} className="text-center py-40">
+                              <div className="flex flex-col items-center justify-center space-y-4">
+                                <Loader2 className="w-12 h-12 text-primary animate-spin" />
+                                <p className="text-sm font-black text-slate-400 uppercase tracking-[0.3em] animate-pulse">正在擷取市場即時數據...</p>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          <TableRow>
+                            <TableCell colSpan={10} className="text-center py-32">
+                              <div className="max-w-md mx-auto p-10 rounded-[3rem] border-4 border-dotted border-slate-100 bg-slate-50/30 flex flex-col items-center space-y-6">
+                                <div className="w-20 h-20 bg-white shadow-xl rounded-3xl flex items-center justify-center text-slate-200">
+                                  <Activity className="w-10 h-10" />
+                                </div>
+                                <div className="space-y-2 text-center">
+                                  <h3 className="text-2xl font-black text-slate-900 tracking-tighter">目前無法取得市場資料</h3>
+                                  <p className="text-sm font-bold text-slate-400 leading-relaxed uppercase tracking-wide">
+                                    {stocksRes?.isFallback 
+                                      ? "API 伺服器連線異常，且本機尚未建立離線快取資料。" 
+                                      : "所有上游數據源目前皆無法連線，請檢查您的網路狀態。"}
+                                  </p>
+                                </div>
+                                <Button 
+                                  onClick={() => { refetchStocks(); refetchFutures(); }}
+                                  className="h-14 px-8 rounded-2xl bg-slate-900 hover:bg-primary text-white font-black transition-all shadow-2xl hover:scale-105 active:scale-95 flex gap-3"
+                                >
+                                  <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+                                  立即重新嘗試連線
+                                </Button>
+                                <p className="text-[10px] text-slate-300 font-bold uppercase tracking-widest">Attempting direct local recovery via local-cache protocol</p>
+                              </div>
+                            </TableCell>
                           </TableRow>
                         )}
                       </TableBody>
@@ -1046,7 +1083,7 @@ export default function App() {
                       <Badge className="bg-primary/10 text-primary border-none font-black text-[10px] tracking-widest px-2 py-0.5">SUB-AGENT ANALYSIS</Badge>
                       <Badge variant="outline" className="font-black text-[10px] px-2 py-0 h-5 rounded-md border-slate-300 text-slate-400 bg-white">
                         {(stocks.find(s => s.id === hoveredStockId)?.marketType === 'OTC' || 
-                          allStockDataMap[hoveredStockId]?.market === 'TPEx') ? '上櫃' : '上市'}
+                          allStockDataMap[hoveredStockId]?.market === 'OTC') ? '上櫃' : '上市'}
                       </Badge>
                       <span className="text-[10px] font-bold text-slate-300 font-mono">#{hoveredStockId}</span>
                     </div>
@@ -1054,13 +1091,15 @@ export default function App() {
                       {stocks.find(s => s.id === hoveredStockId)?.name || allStockDataMap[hoveredStockId]?.stock_name || hoveredStockId}
                     </h3>
                   </div>
-                  <div className={`w-20 h-20 rounded-3xl shadow-2xl flex items-center justify-center transition-transform hover:scale-110 duration-500 ${expertReports[hoveredStockId].tech.sentiment === 'bullish' ? 'bg-red-500 shadow-red-200' : 'bg-emerald-500 shadow-emerald-200'}`}>
-                    {expertReports[hoveredStockId].tech.sentiment === 'bullish' ? (
-                      <Activity className="w-10 h-10 text-white" />
-                    ) : (
-                      <Activity className="w-10 h-10 text-white rotate-180" />
-                    )}
-                  </div>
+                  {hoveredStockId && expertReports[hoveredStockId] && (
+                    <div className={`w-20 h-20 rounded-3xl shadow-2xl flex items-center justify-center transition-transform hover:scale-110 duration-500 ${expertReports[hoveredStockId].tech.sentiment === 'bullish' ? 'bg-red-500 shadow-red-200' : 'bg-emerald-500 shadow-emerald-200'}`}>
+                      {expertReports[hoveredStockId].tech.sentiment === 'bullish' ? (
+                        <Activity className="w-10 h-10 text-white" />
+                      ) : (
+                        <Activity className="w-10 h-10 text-white rotate-180" />
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-8">

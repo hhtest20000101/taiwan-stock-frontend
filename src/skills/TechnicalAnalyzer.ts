@@ -22,7 +22,7 @@ export class TechnicalAnalyzer extends BaseSkill {
   `;
 
   async analyze(data: StockPrice[]): Promise<ExpertReport> {
-    const fallbackId = data && data.length > 0 ? data[0].stock_id : "未知";
+    const fallbackId = (data && data.length > 0 && data[0].stock_id) ? data[0].stock_id : "未知";
     try {
       if (!data || data.length === 0) {
         throw new Error("無足夠數據進行分析");
@@ -42,26 +42,28 @@ export class TechnicalAnalyzer extends BaseSkill {
       if (changePct > 1 && isAboveMA5) sentiment = 'bullish';
       else if (changePct < -1 && !isAboveMA5) sentiment = 'bearish';
 
+      const currentVol = latest.Trading_Volume || latest.volume || 0;
+      const prevVol = prev.Trading_Volume || prev.volume || 0;
+
       return {
         stockId,
         expertName: this.name,
         sentiment,
         confidenceScore: 85,
         summary: `${sentiment === 'bullish' ? '📈 趨勢偏多' : sentiment === 'bearish' ? '📉 趨勢偏空' : '➖ 盤整中'}。目前股價 ${latest.close} 高於 5 日線 (${ma5.toFixed(2)})，短期量價配合尚可。`,
-        fullReport: `### 技術面深度解析 (報告代號: ${stockId})\n\n#### 1. 股價走勢\n最新收盤價為 ${latest.close}，較前一交易日${isUp ? '上漲' : '下跌'} ${Math.abs(changePct).toFixed(2)}%。\n目前股價位處 5 日均線 (${ma5.toFixed(2)}) 之${isAboveMA5 ? '上方' : '下方'}，顯示短期力道${isAboveMA5 ? '轉強' : '偏弱'}。\n\n#### 2. 量價形態\n當日成交量為 ${latest.Trading_Volume}，${latest.Trading_Volume > (prev.Trading_Volume * 1.2) ? '出現明顯增量跡象，需關注同步突破點。' : '量能維持平穩，缺乏明顯攻擊動能。'}\n\n#### 3. 策略建議\n${sentiment === 'bullish' ? '建權在支撐位上方守穩，可順勢操作。' : sentiment === 'bearish' ? '建議暫避鋒芒，觀察下方長期均線支撐。' : '建議區間操作，靜待趨勢明朗。'}`,
+        fullReport: `### 技術面深度解析 (報告代號: ${stockId})\n\n#### 1. 股價走勢\n最新收盤價為 ${latest.close}，較前一交易日${isUp ? '上漲' : '下跌'} ${Math.abs(changePct).toFixed(2)}%。\n目前股價位處 5 日均線 (${ma5.toFixed(2)}) 之${isAboveMA5 ? '上方' : '下方'}，顯示短期力道${isAboveMA5 ? '轉強' : '偏弱'}。\n\n#### 2. 量價形態\n當日成交量（含盤後）約為 ${currentVol.toLocaleString()}，${currentVol > (prevVol * 1.2) ? '出現明顯增量跡象，需關注同步突破點。' : '量能維持平穩，缺乏明顯攻擊動能。'}\n\n#### 3. 策略建議\n${sentiment === 'bullish' ? '建權在支撐位上方守穩，可順勢操作。' : sentiment === 'bearish' ? '建議暫避鋒芒，觀察下方長期均線支撐。' : '建議區間操作，靜待趨勢明朗。'}`,
         timestamp: new Date().toLocaleTimeString()
       };
     } catch (err: unknown) {
       console.error(`[${this.name}] 分析失敗:`, err);
       const errorMessage = err instanceof Error ? err.message : String(err);
-      // Fail-safe 機制：回傳預設報告而不直接拋出錯誤 (避免死機)
       return {
         stockId: fallbackId,
         expertName: this.name,
         sentiment: 'neutral',
         confidenceScore: 0,
         summary: `⚠️ 分析系統暫時超載或數據不足 (${errorMessage})，請稍後重試。`,
-        fullReport: `### 技術面分析異常\n\n系統遇到例外錯誤導致無法完成技術面分析。這通常發生在資料不足或運算超出負載 (503 MODEL_CAPACITY_EXHAUSTED) 時。\n\n**系統建議**：稍後再次點擊分析。`,
+        fullReport: `### 技術面分析異常\n\n系統遇到例外錯誤導致無法完成技術面分析。\n\n**系統建議**：稍後再次點擊分析。`,
         timestamp: new Date().toLocaleTimeString()
       };
     }

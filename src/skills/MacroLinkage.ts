@@ -61,7 +61,7 @@ export class MacroLinkage extends BaseSkill {
               };
            }
 
-           const priceChange = ((benchmark.Close - usHistory[usHistory.length - 2]?.Close) / usHistory[usHistory.length - 2]?.Close) * 100;
+           const priceChange = ((benchmark.close - usHistory[usHistory.length - 2]?.close) / usHistory[usHistory.length - 2]?.close) * 100;
            const sentiment = priceChange > 0 ? "bullish" : "bearish";
            
            const summary = priceChange > 0 
@@ -94,11 +94,11 @@ export class MacroLinkage extends BaseSkill {
       const prevUs = usHistory[usHistory.length - 2] || lastUs;
       
       // 計算換算後的台股對等價： (ADR 價格 * 匯率) / 比例
-      const adrEquivalent = (lastUs.Close * this.exchangeRate) / mapping.ratio;
+      const adrEquivalent = (lastUs.close * this.exchangeRate) / mapping.ratio;
       // 溢價率 = (對等價 - 台股價) / 台股價 * 100
       const premium = ((adrEquivalent - twPrice) / twPrice) * 100;
       
-      const usChange = ((lastUs.Close - prevUs.Close) / prevUs.Close) * 100;
+      const usChange = ((lastUs.close - prevUs.close) / prevUs.close) * 100;
 
       const sentiment = premium > 0.5 ? "bullish" : (premium < -0.5 ? "bearish" : "neutral");
       
@@ -117,7 +117,7 @@ export class MacroLinkage extends BaseSkill {
         sentiment,
         confidenceScore: 90,
         summary,
-        fullReport: `### 🌐 跨市場 ADR 溢價分析\n\n* **美股收盤價**：$${lastUs.Close} (${usChange >= 0 ? '+' : ''}${usChange.toFixed(2)}%)\n* **台美溢價率**：${premium.toFixed(2)}%\n* **匯率基準**：$1 USD = $${this.exchangeRate} TWD\n\n#### 專家診斷：\n${summary}\n\n> [!TIP]\n> 溢價率 (Premium) 是台股權值股開盤的重要風向球。當溢價率超過 1% 時，通常代表國際資金對該產業極度看好。`,
+        fullReport: `### 🌐 跨市場 ADR 溢價分析\n\n* **美股收盤價**：$${lastUs.close} (${usChange >= 0 ? '+' : ''}${usChange.toFixed(2)}%)\n* **台美溢價率**：${premium.toFixed(2)}%\n* **匯率基準**：$1 USD = $${this.exchangeRate} TWD\n\n#### 專家診斷：\n${summary}\n\n> [!TIP]\n> 溢價率 (Premium) 是台股權值股開盤的重要風向球。當溢價率超過 1% 時，通常代表國際資金對該產業極度看好。`,
         timestamp
       };
     } catch (err: unknown) {

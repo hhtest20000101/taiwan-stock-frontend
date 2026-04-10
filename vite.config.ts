@@ -26,6 +26,11 @@ export default defineConfig({
         target: 'https://openapi.taifex.com.tw',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/taifex/, '')
+      },
+      '/api/finmind': {
+        target: 'https://api.finmindtrade.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/finmind/, '')
       }
     }
   }
